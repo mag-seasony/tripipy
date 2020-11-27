@@ -1,8 +1,12 @@
+#!/usr/bin/python3
+
 import guizero as gz
 import time
 from tripipy import chipdrive
 from tripipy import tmc5130regs
+from tripipy import tmc5160regs
 import sys
+import argparse
 
 
 class Ftext(gz.Text):
@@ -167,9 +171,10 @@ class Button(gz.PushButton):
 
 
 class motorPanel():
-    def __init__(self, motor, gridx, pfields, panel):
+    def __init__(self, motor, gridx, pfields, panel, tmc_id):
         self.motor=motor
         self.panel=panel
+        self.tmc_id = tmc_id
         self.mfields={}
         for k,v in pfields.items():
             if not v['class'] is None:
@@ -188,7 +193,12 @@ class motorPanel():
 
     def flipdir(self):
         dir=self.mfields['reversed'].value==1
-        self.motor['chipregs/GCONF'].setFlag(tmc5130regs.GCONFflags.shaft,dir)
+        if self.tmc_id == "5130":
+            self.motor['chipregs/GCONF'].setFlag(tmc5130regs.GCONFflags.shaft,dir)
+        elif self.tmc_id == "5160":
+            self.motor['chipregs/GCONF'].setFlag(tmc5160regs.GCONFflags.shaft, dir)
+        else:
+            print("ERROR: no such tmc_id" + self.tmc_id)
         self.motor.writeInt('GCONF')
 
     def actionButton(self):
@@ -203,7 +213,7 @@ class motorPanel():
         elif rspeed=='sidereal time':
             speed=86164.1/86400
         elif rspeed=='target':
-            speed=self.mfields['userpm'].getValue()      
+            speed=self.mfields['userpm'].getValue()
         else:
             raise ValueError("speed oops " + rspeed)
         if rtype=='goto target':
@@ -217,11 +227,24 @@ class motorPanel():
 
 
 class Example():
-    def __init__(self):
+    def __init__(self, tmc_id, spi_channel):
 
         self.elapsed = None
         self.motorpan = None
         self.starttime = None
+        self.tmc_id = tmc_id
+        self.spi_channel = spi_channel
+
+        at_pos = None
+        at_VMAX = None
+        if self.tmc_id == "5130":
+            at_pos = tmc5130regs.statusFlags.at_position
+            at_VMAX = tmc5130regs.statusFlags.at_VMAX
+        elif self.tmc_id == "5160":
+            at_pos = tmc5160regs.statusFlags.at_position
+            at_VMAX = tmc5160regs.statusFlags.at_VMAX
+        else:
+            print("ERROR: tmc id does not exist " + self.tmc_id)
 
         """
         defines the fields setup for each motor. Each entry a list of 4.
@@ -244,8 +267,8 @@ class Example():
             ('targetpos',gz.Text, {'text': 'target posn:','align': 'right'}, EdFloat,    {'minval':None, 'maxval': None, 'align': 'left'}),
             ('action',   gz.Text, {'text': 'do it NOW!', 'align': 'right'}, Button,      {'text': 'ACTION!', 'command': '../actionButton'}),
             ('reversed', gz.Text, {'text': 'swap direction:','align':'right'},CheckBox,  {'command': '../flipdir'}),
-            ('stat_atpos',gz.Text,{'text': 'at posn'},                      BitField,    {'motorfield': 'chipregs/SHORTSTAT', 'flagbit': tmc5130regs.statusFlags.at_position,}),
-            ('stat_atmax',gz.Text,{'text': 'at max rpm'},                   BitField,    {'motorfield': 'chipregs/SHORTSTAT', 'flagbit': tmc5130regs.statusFlags.at_VMAX,}),
+            ('stat_atpos',gz.Text,{'text': 'at posn'},                      BitField,    {'motorfield': 'chipregs/SHORTSTAT', 'flagbit': at_pos,}),
+            ('stat_atmax',gz.Text,{'text': 'at max rpm'},                   BitField,    {'motorfield': 'chipregs/SHORTSTAT', 'flagbit': at_VMAX,}),
             ('posn',     gz.Text, {'text': 'time:',      'align': 'right'}, TimeField,   {'motorfield':'settings/posn', 'format': '{hours:02d}:{mins:02d}:{secs:02d}', 'align':'left'}),
             ('XACTUAL',  gz.Text, {'text': 'XACTUAL:',   'align': 'right'}, Ffield,      {'motorfield': 'chipregs/XACTUAL', 'format': '{:7d}', 'align': 'left'}),
             ('XTARGET',  gz.Text, {'text': 'XTARGET:',   'align': 'right'}, Ffield,      {'motorfield': 'chipregs/XTARGET', 'format': '{:7d}', 'align': 'left'}),
@@ -279,20 +302,28 @@ class Example():
         for y, field in enumerate(self.motorfields):
             l = field[1](mpanel, grid=[0, y], **field[2])
             pfields[field[0]] = {'y': y, 'class': field[3], 'kwargs': field[4], }
-        self.motorpan = motorPanel(motor=chipdrive.tmc5130(), gridx=1, pfields=pfields, panel=mpanel)  # loglvl='rawspi'
+        self.motorpan = motorPanel(motor=chipdrive.tmc5130(spiChannel=self.spi_channel), gridx=1, pfields=pfields, panel=mpanel, tmc_id=self.tmc_id)  # loglvl='rawspi'
         app.repeat(1000, self.ticker)
         app.display()
         print('shutting down')
         self.motorpan.close()
 
 
-def main():
+def main(argv):
     """
     Entry point
     """
-    ex = Example()
+    print("usage: tripipy-example <--spi [0,1]> <--tmc [5130, 5160]>")
+
+    ex = Example(args.tmc, args.spi)
     ex.run()
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--tmc', help='tmc id, supported 5130 and 5160', type=str, default="5130")
+    parser.add_argument('--spi', help='spi channel, supported: 0, 1', type=int, default=1)
+
+    args = parser.parse_args()
+    main(args)
